@@ -19,7 +19,7 @@ def get_sales(date: str) -> List[Dict[str, Any]]:
     if not token:
         raise EnvironmentError("AUTH_TOKEN environment variable is not set in .env.")
 
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": token"}
     all_sales: List[Dict[str, Any]] = []  # Сюди будемо накопичувати всі результати зі сторінок
     page = 1  # Починаємо з першої сторінки
 
