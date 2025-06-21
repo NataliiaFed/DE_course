@@ -1,4 +1,3 @@
-from __future__ import annotations
 from datetime import datetime
 from airflow.models.dag import DAG
 from airflow.providers.amazon.aws.operators.glue import GlueJobOperator
@@ -12,7 +11,7 @@ BRONZE_TO_SILVER_SCRIPT_PATH = f"s3://{DL_BUCKET_NAME}/{GLUE_SCRIPT_LOCATION_PRE
 default_args = {
     'owner': 'airflow',
     'start_date': datetime(2023, 1, 1),
-    'retries': 1,  #3
+    'retries': 1,
     'aws_conn_id': 'aws_default'
 }
 
