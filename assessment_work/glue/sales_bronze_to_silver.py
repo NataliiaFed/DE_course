@@ -20,6 +20,7 @@ bronze_dyf = glueContext.create_dynamic_frame.from_options(
     transformation_ctx="bronze_dyf"
 )
 
+# exit if the source is empty
 if bronze_dyf.count() == 0:
     print("No data in bronze zone. Exiting.")
     sys.exit(0)
@@ -28,13 +29,12 @@ if bronze_dyf.count() == 0:
 bronze_df = bronze_dyf.toDF()
 
 # cleaning and transformation
-cleaned_df = bronze_df.withColumn("price", regexp_replace(col("price"), "[^0-9.]", "").cast("decimal(10, 2)")) \
-                      .withColumn("purchase_date", to_date(col("purchasedate"), "yyyy-M-d")) \
-                      .withColumn("customer_id", col("customerid").cast("int")) \
-                      .withColumn("product", col("product")) \
-                      .select("customer_id", "purchase_date", "product", "price") \
-                      .na.drop(subset=["customer_id", "purchase_date"]) \
-                      .dropDuplicates()
+cleaned_df = (
+    bronze_df.withColumn("price", regexp_replace(col("price"), "[^0-9.]", "").cast("decimal(10, 2)"))
+    .withColumn("purchase_date", to_date(col("purchasedate"), "yyyy-M-d"))
+    .withColumn("customer_id", col("customerid").cast("int"))
+    .select("customer_id", "purchase_date", "product", "price")
+)
 
 # partitioning
 partitioned_df = cleaned_df.withColumn("year", year(col("purchase_date"))) \
