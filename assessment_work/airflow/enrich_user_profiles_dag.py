@@ -1,25 +1,41 @@
 from datetime import datetime, timedelta
 from airflow.models.dag import DAG
-from airflow.providers.amazon.aws.operators.redshift_sql import RedshiftSQLOperator
-from airflow.providers.amazon.aws.transfers.s3_to_redshift import S3ToRedshiftOperator
-from airflow.providers.amazon.aws.sensors.s3 import S3KeySensor
+from airflow.providers.amazon.aws.operators.redshift_data import RedshiftDataOperator
+
+# 1. removed check_s3_for_files :
+# S3KeySensor as suggested in the template checks for a single file only but we need to check for multiple files in the prefix
+# but S3PrefixSensor which checks for any is not supported (ImportError)
+# 2. replaced S3ToRedshiftOperator with RedshiftDataOperator as S3ToRedshiftOperator seems to not be working with Redshift Serverless
 
 AWS_CONN_ID = "aws_default"
-REDSHIFT_CONN_ID = "redshift_default"
 S3_BUCKET = "natafed-data-platform-data-lake-321711906247"
 REDSHIFT_SCHEMA = "natafed_schema"
+REDSHIFT_CLUSTER_IDENTIFIER = "natafed-data-platform-workgroup"
+REDSHIFT_IAM_ROLE = "arn:aws:iam::321711906247:role/natafed-data-platform-redshift-service-role"
 
 CUSTOMERS_S3_KEY = "silver/customers/"
 USER_PROFILES_S3_KEY = "silver/user_profiles/"
 
-default_args = {
-    'owner': 'natafed',
-    'depends_on_past': False,
-    'email_on_failure': False,
-    'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=5),
-}
+CREATE_CUSTOMERS_SILVER_TABLE = f"""
+CREATE TABLE IF NOT EXISTS {REDSHIFT_SCHEMA}.customers_silver (
+    id INT,
+    first_name VARCHAR(256),
+    last_name VARCHAR(256),
+    email VARCHAR(256),
+    registration_date DATE,
+    state VARCHAR(256)
+);
+"""
+
+CREATE_USER_PROFILES_SILVER_TABLE = f"""
+CREATE TABLE IF NOT EXISTS {REDSHIFT_SCHEMA}.user_profiles_silver (
+    email VARCHAR(256),
+    full_name VARCHAR(256),
+    state VARCHAR(256),
+    phone_number VARCHAR(256),
+    birth_date DATE
+);
+"""
 
 CREATE_GOLD_TABLE = f"""
 CREATE TABLE IF NOT EXISTS {REDSHIFT_SCHEMA}.user_profiles_enriched (
@@ -78,6 +94,15 @@ WHEN NOT MATCHED THEN
     VALUES (source.client_id, source.first_name, source.last_name, source.email, source.registration_date, source.state, source.phone_number, source.birth_date);
 """
 
+default_args = {
+    'owner': 'natafed',
+    'depends_on_past': False,
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+}
+
 with DAG(
     dag_id="enrich_user_profiles_pipeline",
     default_args=default_args,
@@ -86,67 +111,72 @@ with DAG(
     catchup=False,
     tags=["gold", "redshift", "enrichment"],
 ) as dag:
-    
-    # check if silver data is available
-    check_customers_silver_data = S3KeySensor(
-        task_id='check_customers_silver_data',
-        bucket_name=S3_BUCKET,
-        bucket_key=CUSTOMERS_S3_KEY,
-        aws_conn_id=AWS_CONN_ID,
+    # Create silver tables
+    create_customers_silver_table = RedshiftDataOperator(
+        task_id="create_customers_silver_table",
+        sql=CREATE_CUSTOMERS_SILVER_TABLE,
+        cluster_identifier=REDSHIFT_CLUSTER_IDENTIFIER,
+        database="dev",
+        aws_conn_id=AWS_CONN_ID
     )
-
-    check_user_profiles_silver_data = S3KeySensor(
-        task_id='check_user_profiles_silver_data',
-        bucket_name=S3_BUCKET,
-        bucket_key=USER_PROFILES_S3_KEY,
-        aws_conn_id=AWS_CONN_ID,
+    create_user_profiles_silver_table = RedshiftDataOperator(
+        task_id="create_user_profiles_silver_table",
+        sql=CREATE_USER_PROFILES_SILVER_TABLE,
+        cluster_identifier=REDSHIFT_CLUSTER_IDENTIFIER,
+        database="dev",
+        aws_conn_id=AWS_CONN_ID
     )
-
-    # create gold table
-    create_gold_table = RedshiftSQLOperator(
-        task_id="create_gold_table", 
-        sql=CREATE_GOLD_TABLE, 
-        redshift_conn_id=REDSHIFT_CONN_ID
-    )
-
-    # load data from S3 to Redshift
-    customers_load_s3_to_redshift = S3ToRedshiftOperator(
+    # Load data from S3 to Redshift silver tables
+    customers_load_s3_to_redshift = RedshiftDataOperator(
         task_id='customers_load_s3_to_redshift',
-        s3_bucket=S3_BUCKET,
-        s3_key=CUSTOMERS_S3_KEY,
-        schema=REDSHIFT_SCHEMA,
-        table='customers_silver',
-        copy_options=["FORMAT AS PARQUET"],
-        redshift_conn_id=REDSHIFT_CONN_ID,
+        sql=f"""
+            COPY {REDSHIFT_SCHEMA}.customers_silver
+            FROM 's3://{S3_BUCKET}/{CUSTOMERS_S3_KEY}'
+            IAM_ROLE '{REDSHIFT_IAM_ROLE}'
+            FORMAT AS PARQUET;
+        """,
+        cluster_identifier=REDSHIFT_CLUSTER_IDENTIFIER,
+        database="dev",
+        aws_conn_id=AWS_CONN_ID
     )
-
-    user_profiles_load_s3_to_redshift = S3ToRedshiftOperator(
+    user_profiles_load_s3_to_redshift = RedshiftDataOperator(
         task_id='user_profiles_load_s3_to_redshift',
-        s3_bucket=S3_BUCKET,
-        s3_key=USER_PROFILES_S3_KEY,
-        schema=REDSHIFT_SCHEMA,
-        table='user_profiles_silver',
-        copy_options=["FORMAT AS PARQUET"],
-        redshift_conn_id=REDSHIFT_CONN_ID,
+        sql=f"""
+            COPY {REDSHIFT_SCHEMA}.user_profiles_silver
+            FROM 's3://{S3_BUCKET}/{USER_PROFILES_S3_KEY}'
+            IAM_ROLE '{REDSHIFT_IAM_ROLE}'
+            FORMAT AS PARQUET;
+        """,
+        cluster_identifier=REDSHIFT_CLUSTER_IDENTIFIER,
+        database="dev",
+        aws_conn_id=AWS_CONN_ID
     )
 
-    # transform and merge
-    create_staging_table = RedshiftSQLOperator(
-        task_id="create_staging_table", 
-        sql=STAGING_TABLE_SQL, 
-        redshift_conn_id=REDSHIFT_CONN_ID
+    # Create gold table
+    create_gold_table = RedshiftDataOperator(
+        task_id="create_gold_table",
+        sql=CREATE_GOLD_TABLE,
+        cluster_identifier=REDSHIFT_CLUSTER_IDENTIFIER,
+        database="dev",
+        aws_conn_id=AWS_CONN_ID
     )
-
-    merge_data_to_gold = RedshiftSQLOperator(
-        task_id="merge_data_to_gold", 
-        sql=MERGE_SQL, 
-        redshift_conn_id=REDSHIFT_CONN_ID
+    # Transform and merge
+    create_staging_table = RedshiftDataOperator(
+        task_id="create_staging_table",
+        sql=STAGING_TABLE_SQL,
+        cluster_identifier=REDSHIFT_CLUSTER_IDENTIFIER,
+        database="dev",
+        aws_conn_id=AWS_CONN_ID
     )
-
-    # dependencies
-    check_customers_silver_data >> customers_load_s3_to_redshift
-    check_user_profiles_silver_data >> user_profiles_load_s3_to_redshift
-    
+    merge_data_to_gold = RedshiftDataOperator(
+        task_id="merge_data_to_gold",
+        sql=MERGE_SQL,
+        cluster_identifier=REDSHIFT_CLUSTER_IDENTIFIER,
+        database="dev",
+        aws_conn_id=AWS_CONN_ID
+    )
+    # Dependencies
+    create_customers_silver_table >> customers_load_s3_to_redshift
+    create_user_profiles_silver_table >> user_profiles_load_s3_to_redshift
     [customers_load_s3_to_redshift, user_profiles_load_s3_to_redshift, create_gold_table] >> create_staging_table
-    
     create_staging_table >> merge_data_to_gold
