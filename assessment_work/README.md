@@ -1,57 +1,57 @@
 # Final Project
 
-## Опис проекту
+## Project Description
 
-Цей проект реалізує сучасний data pipeline для компанії, що займається продажем побутової електроніки. Мета — побудувати платформу для інтеграції, очищення, трансформації та збагачення даних з різних джерел для подальшої аналітики. Проект виконано на базі AWS (S3, Glue, Redshift, Airflow).
+This project implements a modern data pipeline for a company engaged in consumer electronics sales. The goal is to build a platform for integrating, cleaning, transforming, and enriching data from various sources for subsequent analytics. The project is built on AWS (S3, Glue, Redshift, Airflow).
 
-## Архітектура рішення
+## Solution Architecture
 
-- **S3** — зберігання сирих (raw), бронзових (bronze) та срібних (silver) даних
-- **Glue** — ETL-обробка даних (raw → bronze → silver)
-- **Redshift** — зберігання та обробка аналітичних (gold) даних
-- **Airflow** — оркестрація пайплайнів (DAG-ів)
+- **S3** — storage for raw, bronze, and silver data
+- **Glue** — ETL data processing (raw → bronze → silver)
+- **Redshift** — storage and processing of analytical (gold) data
+- **Airflow** — orchestration of pipelines (DAGs)
 
-## Джерела даних
-- **customers** — CSV, daily dump (повний дамп за кожен день)
-- **sales** — CSV, партиціоновані по датах
-- **user_profiles** — JSONLines, ідеальна якість
+## Data Sources
+- **customers** — CSV, daily dump (full dump for each day)
+- **sales** — CSV, partitioned by date
+- **user_profiles** — JSONLines, high quality data
 
-## Структура пайплайнів (DAG-ів)
+## Pipeline Structure (DAGs)
 
-1. **process_sales_pipeline** — ETL для sales (raw → bronze → silver, Glue)
-2. **process_customers_pipeline** — ETL для customers (raw → bronze → silver, Glue)
-3. **process_user_profiles_pipeline** — ETL для user_profiles (raw → silver, Glue)
-4. **enrich_user_profiles_pipeline** — збагачення customers даними user_profiles, запис у gold (Redshift)
+1. **process_sales_pipeline** — ETL for sales (raw → bronze → silver, Glue)
+2. **process_customers_pipeline** — ETL for customers (raw → bronze → silver, Glue)
+3. **process_user_profiles_pipeline** — ETL for user_profiles (raw → silver, Glue)
+4. **enrich_user_profiles_pipeline** — enrichment of customers with user_profiles data, write to gold (Redshift)
 
-### Чому саме така структура DAG-ів?
-- **Модульність**: Кожен пайплайн відповідає за окреме джерело/етап, що спрощує супровід, дебаг і повторне використання.
-- **Гнучкість**: Деякі пайплайни (наприклад, user_profiles, enrichment) запускаються вручну, інші — за розкладом. Це дозволяє не блокувати оновлення одних даних через інші.
-- **Прозорість**: Легко відслідковувати статус кожного етапу окремо, швидко локалізувати проблеми.
-- **Масштабованість**: Додаючи нові джерела, достатньо додати новий DAG, не змінюючи існуючі.
+### Why This DAG Structure?
+- **Modularity**: Each pipeline is responsible for a separate source/stage, which simplifies maintenance, debugging, and reuse.
+- **Flexibility**: Some pipelines (e.g., user_profiles, enrichment) are triggered manually, others run on schedule. This prevents blocking updates to one data source due to another.
+- **Transparency**: It's easy to track the status of each stage separately and quickly identify issues.
+- **Scalability**: When adding new sources, you only need to add a new DAG without modifying existing ones.
 
-> Об'єднання пайплайнів у меншу кількість DAG-ів ускладнило б моніторинг, повторне використання та гнучкість запуску окремих етапів.
+> Combining pipelines into fewer DAGs would complicate monitoring, reuse, and the flexibility of running individual stages.
 
-## Структура таблиць
+## Table Structure
 
-- **Bronze**: максимально схожі на raw (оригінальні назви колонок, всі типи — STRING). Це спрощує аудит і пошук помилок у сирих даних.
-- **Silver**: очищені, нормалізовані дані з коректними типами, перейменованими колонками, партиціонуванням (для sales). Це оптимізує аналітику та підготовку до збагачення.
-- **Gold**: збагачені дані (user_profiles_enriched) — результат інтеграції customers та user_profiles, з повними іменами, штатами, віком, телефоном тощо. Призначені для аналітики.
+- **Bronze**: maximally similar to raw (original column names, all types are STRING). This simplifies auditing and error detection in raw data.
+- **Silver**: cleaned, normalized data with correct types, renamed columns, partitioning (for sales). This optimizes analytics and preparation for enrichment.
+- **Gold**: enriched data (user_profiles_enriched) — result of integrating customers and user_profiles, with full names, states, age, phone numbers, etc. Designed for analytics.
 
-### Чому саме так?
-- **Bronze** — для прозорості та відтворюваності (raw → bronze — мінімум трансформацій)
-- **Silver** — для аналітики (чисті, зручні для BI/SQL)
-- **Gold** — для бізнес-запитань, збагачені всіма доступними атрибутами
+### Why This Approach?
+- **Bronze** — for transparency and reproducibility (raw → bronze — minimum transformations)
+- **Silver** — for analytics (clean, convenient for BI/SQL)
+- **Gold** — for business queries, enriched with all available attributes
 
-## Оркестрація та автоматизація
-- Всі ETL та enrichment процеси керуються через Apache Airflow (AWS MWAA)
-- DAG-и використовують GlueJobOperator (для Glue) та RedshiftDataOperator (для Redshift)
-- Дані автоматично переміщуються між шарами (raw → bronze → silver → gold)
+## Orchestration and Automation
+- All ETL and enrichment processes are managed through Apache Airflow (AWS MWAA)
+- DAGs use GlueJobOperator (for Glue) and RedshiftDataOperator (for Redshift)
+- Data automatically flows between layers (raw → bronze → silver → gold)
 
-## Як розгорнути
-1. Деплой CloudFormation stack з assessment_work/DataPlatform.yml
-2. Завантажити дані у S3 bucket (raw)
-3. Запустити Glue Crawler для створення таблиць у Data Catalog
-4. DAG-и Airflow автоматично підхоплять нові дані та запустять ETL
+## How to Deploy
+1. Deploy CloudFormation stack from assessment_work/DataPlatform.yml
+2. Upload data to S3 bucket (raw)
+3. Run Glue Crawler to create tables in Data Catalog
+4. Airflow DAGs automatically pick up new data and run ETL
 
-## Автор
+## Author
 - Nataliia Fedorets
